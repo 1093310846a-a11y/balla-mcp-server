@@ -1,0 +1,12 @@
+[
+  {
+    "id": 1,
+    "student_id": "stu_001",
+    "function_type": "对数函数",
+    "question": "log(x²)=2log(x) 恒成立吗",
+    "wrong_answer": "恒成立",
+    "correct_answer": "仅 x>0 时成立",
+    "error_type": "F8",
+    "created_at": "2026-07-11T19:49:57.511926"
+  }
+]

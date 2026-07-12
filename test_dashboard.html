@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>柏拉 v2.0 - MCP 工具测试台</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, sans-serif; max-width: 1100px; margin: 20px auto; padding: 20px; background: #fafafa; }
+  h1 { color: #1a4d8c; }
+  .status { padding: 8px 12px; background: #d4edda; border-radius: 4px; margin-bottom: 20px; }
+  .status.error { background: #f8d7da; color: #721c24; }
+  .tool { background: white; border: 1px solid #ddd; border-radius: 8px; padding: 20px; margin: 12px 0; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+  h2 { color: #1a4d8c; margin-top: 0; }
+  label { display: inline-block; margin: 4px 8px 4px 0; font-size: 14px; }
+  input, select { padding: 6px 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; }
+  .btn { background: #1a4d8c; color: white; border: none; padding: 8px 18px; border-radius: 4px; cursor: pointer; font-size: 14px; margin-top: 8px; }
+  .btn:hover { background: #15396a; }
+  .result { background: #1e1e1e; color: #d4d4d4; padding: 14px; border-radius: 4px; white-space: pre-wrap; font-family: 'Consolas', monospace; font-size: 12px; max-height: 300px; overflow: auto; margin-top: 12px; }
+  .field-row { margin: 6px 0; }
+  .hint { color: #888; font-size: 12px; margin-left: 4px; }
+</style>
+</head>
+<body>
+
+<h1>🛠️ 柏拉 v2.0 - MCP 工具测试台</h1>
+<div class="status" id="status">⚡ 服务器：<code>http://localhost:8000</code>（已检测...）</div>
+
+<!-- 工具 1 -->
+<div class="tool">
+  <h2>🧮 1. calculator（计算器）</h2>
+  <div class="field-row">
+    <label>表达式：<input id="calc-expr" value="2*3+5" style="width: 200px;" /></label>
+    <button class="btn" onclick="testCalc()">测试</button>
+    <span class="hint">支持: + - * / ** sqrt() log() sin() cos() pi e 等</span>
+  </div>
+  <pre class="result" id="calc-result">（点上面"测试"按钮）</pre>
+</div>
+
+<!-- 工具 2 -->
+<div class="tool">
+  <h2>📈 2. function_plotter（函数画图）</h2>
+  <div class="field-row">
+    <label>函数：<input id="plot-func" value="x*x-5*x+6" style="width: 180px;" /></label>
+    <label>x_min：<input id="plot-xmin" value="0" type="number" style="width: 70px;" /></label>
+    <label>x_max：<input id="plot-xmax" value="6" type="number" style="width: 70px;" /></label>
+    <button class="btn" onclick="testPlot()">测试</button>
+  </div>
+  <pre class="result" id="plot-result">（点上面"测试"按钮）</pre>
+</div>
+
+<!-- 工具 3 -->
+<div class="tool">
+  <h2>📝 3. problem_generator（同类题生成）⭐</h2>
+  <div class="field-row">
+    <label>主题：
+      <select id="prob-topic">
+        <option>二次函数</option>
+        <option>指数函数</option>
+        <option>对数函数</option>
+        <option>幂函数</option>
+        <option>三角函数</option>
+        <option>复合函数</option>
+      </select>
+    </label>
+    <label>难度：
+      <select id="prob-diff">
+        <option>easy</option>
+        <option selected>mid</option>
+        <option>hard</option>
+      </select>
+    </label>
+    <button class="btn" onclick="testProb()">生成题目</button>
+    <span class="hint">答案仅柏拉可见，不会直接告诉学生</span>
+  </div>
+  <pre class="result" id="prob-result">（点上面"生成题目"按钮）</pre>
+</div>
+
+<!-- 工具 4 -->
+<div class="tool">
+  <h2>📒 4. mistake_recorder（错题本）⭐</h2>
+  <div class="field-row">
+    <label>操作：
+      <select id="mistake-action" onchange="toggleMistakeFields()">
+        <option value="record">记录错题</option>
+        <option value="list">查询错题</option>
+        <option value="stats">错题统计</option>
+      </select>
+    </label>
+    <label>学生ID：<input id="mistake-sid" value="stu_001" style="width: 100px;" /></label>
+  </div>
+  <div id="mistake-record-fields" class="field-row">
+    <label>函数类型：<input id="mistake-func" value="对数函数" /></label>
+    <label>题目：<input id="mistake-q" value="log(x²)=2log(x) 恒成立吗" style="width: 300px;" /></label>
+    <label>错答：<input id="mistake-wrong" value="恒成立" /></label>
+    <label>正解：<input id="mistake-correct" value="仅 x>0 时成立" /></label>
+    <label>错因：<input id="mistake-err" value="F8" /></label>
+  </div>
+  <button class="btn" onclick="testMistake()">执行</button>
+  <pre class="result" id="mistake-result">（点上面"执行"按钮）</pre>
+</div>
+
+<script>
+const BASE = "http://localhost:8000";
+
+// 健康检查
+fetch(BASE + "/").then(r => r.json()).then(d => {
+  document.getElementById("status").innerHTML = `✅ 服务器正常 | 错题总数: ${d.total_mistakes} | 主题: ${d.topics.join(", ")}`;
+}).catch(e => {
+  document.getElementById("status").className = "status error";
+  document.getElementById("status").textContent = "❌ 服务器未响应（请先运行 python balla_mcp_server.py）";
+});
+
+function toggleMistakeFields() {
+  const action = document.getElementById("mistake-action").value;
+  document.getElementById("mistake-record-fields").style.display = action === "record" ? "block" : "none";
+}
+
+async function callAPI(path, elId) {
+  document.getElementById(elId).textContent = "⏳ 调中...";
+  try {
+    const res = await fetch(path);
+    const data = await res.json();
+    document.getElementById(elId).textContent = JSON.stringify(data, null, 2);
+  } catch (e) {
+    document.getElementById(elId).textContent = "❌ 错误: " + e.message;
+  }
+}
+
+function testCalc() {
+  const expr = encodeURIComponent(document.getElementById("calc-expr").value);
+  callAPI(`${BASE}/calculator?expr=${expr}`, "calc-result");
+}
+
+function testPlot() {
+  const func = encodeURIComponent(document.getElementById("plot-func").value);
+  const xmin = document.getElementById("plot-xmin").value;
+  const xmax = document.getElementById("plot-xmax").value;
+  callAPI(`${BASE}/function_plotter?func=${func}&x_min=${xmin}&x_max=${xmax}`, "plot-result");
+}
+
+function testProb() {
+  const topic = encodeURIComponent(document.getElementById("prob-topic").value);
+  const diff = document.getElementById("prob-diff").value;
+  callAPI(`${BASE}/problem_generator?topic=${topic}&difficulty=${diff}`, "prob-result");
+}
+
+function testMistake() {
+  const action = document.getElementById("mistake-action").value;
+  const sid = encodeURIComponent(document.getElementById("mistake-sid").value);
+  let path = `${BASE}/mistake_recorder?action=${action}&student_id=${sid}`;
+  if (action === "record") {
+    const f = encodeURIComponent(document.getElementById("mistake-func").value);
+    const q = encodeURIComponent(document.getElementById("mistake-q").value);
+    const w = encodeURIComponent(document.getElementById("mistake-wrong").value);
+    const c = encodeURIComponent(document.getElementById("mistake-correct").value);
+    const e = encodeURIComponent(document.getElementById("mistake-err").value);
+    path += `&function_type=${f}&question=${q}&wrong_answer=${w}&correct_answer=${c}&error_type=${e}`;
+  }
+  callAPI(path, "mistake-result");
+}
+</script>
+</body>
+</html>
