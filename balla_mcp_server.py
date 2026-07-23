@@ -415,7 +415,7 @@ async def student_profile(
                     "action": "create",
                     "name": name,
                     "existing_count": len(existing),
-                    "message": f"已经有一个叫「{name}」的档案了～换个名字？比如「{name}²」、「函数小王子{name}」都行。",
+                    "message": f"已经有个叫「{name}」的档案了。换个名字？",
                     "hint": "请用新的 name 再调一次 create"
                 })
                 return
