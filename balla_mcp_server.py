@@ -1,6 +1,6 @@
 """
 柏拉 v2.0 - 数学工具 MCP 后端
-4 个工具：calculator / function_plotter / problem_generator / mistake_recorder
+5 个工具：calculator / function_plotter / problem_generator / mistake_recorder / student_profile
 单文件部署，适合 Render / Railway / 本地
 """
 
@@ -103,15 +103,48 @@ def save_mistakes():
 load_mistakes()
 
 
+# ============ 学生画像存储（JSON 文件）============
+PROFILES_DB = "student_profiles.json"
+PROFILES = []
+
+
+def load_profiles():
+    global PROFILES
+    if os.path.exists(PROFILES_DB):
+        try:
+            with open(PROFILES_DB, "r", encoding="utf-8") as f:
+                PROFILES = json.load(f)
+        except Exception:
+            PROFILES = []
+
+
+def save_profiles():
+    try:
+        with open(PROFILES_DB, "w", encoding="utf-8") as f:
+            json.dump(PROFILES, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+load_profiles()
+
+
 # ============ 健康检查 ==========
 @app.get("/")
 def health():
     return {
         "status": "ok",
         "service": "balla-v2-mcp",
-        "endpoints": ["/calculator", "/function_plotter", "/problem_generator", "/mistake_recorder"],
+        "endpoints": [
+            "/calculator",
+            "/function_plotter",
+            "/problem_generator",
+            "/mistake_recorder",
+            "/student_profile",
+        ],
         "topics": list(PROBLEM_BANK.keys()),
         "total_mistakes": len(MISTAKES),
+        "total_profiles": len(PROFILES),
         "timestamp": datetime.now().isoformat(),
     }
 
@@ -315,6 +348,173 @@ def clear_mistakes(student_id: str = None):
         MISTAKES = []
     save_mistakes()
     return {"status": "ok", "remaining": len(MISTAKES)}
+
+
+# ============ 工具 5: student_profile（学情画像 - 长期记忆核心）============
+@app.get("/student_profile")
+async def student_profile(
+    action: str = "read",
+    name: str = "",
+    grade: str = "",
+    learning_style: str = "",
+    metacognition_level: str = "",
+    weak_points: str = "",
+    last_topic: str = "",
+    session_count: int = 0,
+    notes: str = "",
+    keyword: str = "",
+):
+    """学生学情画像 - SSE 格式
+
+    Actions:
+        - read: 按姓名查档案（查不到返回found:false）
+        - create: 新建档案（如重名返回status:duplicate）
+        - update: 更新档案某字段
+        - search: 关键词模糊搜索
+        - list: 列出所有档案
+    """
+    async def event_stream():
+        global PROFILES
+
+        if action == "read":
+            # 按姓名精确查
+            matches = [p for p in PROFILES if p.get("name") == name]
+            if not matches:
+                yield sse_format({
+                    "status": "ok",
+                    "action": "read",
+                    "found": False,
+                    "name": name,
+                    "message": f"未找到名为「{name}」的档案"
+                })
+            elif len(matches) == 1:
+                yield sse_format({
+                    "status": "ok",
+                    "action": "read",
+                    "found": True,
+                    "name": name,
+                    "profile": matches[0]
+                })
+            else:
+                # 多个同名（理论上不该出现，但兜底）
+                yield sse_format({
+                    "status": "ok",
+                    "action": "read",
+                    "found": "multiple",
+                    "name": name,
+                    "count": len(matches),
+                    "profiles": matches
+                })
+
+        elif action == "create":
+            # 先查重名
+            existing = [p for p in PROFILES if p.get("name") == name]
+            if existing:
+                yield sse_format({
+                    "status": "duplicate",
+                    "action": "create",
+                    "name": name,
+                    "existing_count": len(existing),
+                    "message": f"已经有一个叫「{name}」的档案了～换个名字？比如「{name}²」、「函数小王子{name}」都行。",
+                    "hint": "请用新的 name 再调一次 create"
+                })
+                return
+            # 正常创建
+            new_profile = {
+                "name": name,
+                "grade": grade or "未告知",
+                "learning_style": learning_style or "未告知",
+                "metacognition_level": metacognition_level or "未告知",
+                "weak_points": weak_points or "",
+                "last_topic": last_topic or "",
+                "session_count": session_count or 0,
+                "notes": notes or "",
+                "created_at": datetime.now().isoformat(),
+                "updated_at": datetime.now().isoformat(),
+            }
+            PROFILES.append(new_profile)
+            save_profiles()
+            yield sse_format({
+                "status": "ok",
+                "action": "created",
+                "profile": new_profile,
+                "total_profiles": len(PROFILES)
+            })
+
+        elif action == "update":
+            # 按姓名找
+            found = [p for p in PROFILES if p.get("name") == name]
+            if not found:
+                yield sse_format({
+                    "status": "error",
+                    "action": "update",
+                    "error": f"未找到名为「{name}」的档案，无法更新"
+                })
+                return
+            profile = found[0]
+            # 只更新非空字段
+            if grade: profile["grade"] = grade
+            if learning_style: profile["learning_style"] = learning_style
+            if metacognition_level: profile["metacognition_level"] = metacognition_level
+            if weak_points: profile["weak_points"] = weak_points
+            if last_topic: profile["last_topic"] = last_topic
+            if session_count: profile["session_count"] = session_count
+            if notes: profile["notes"] = notes
+            profile["updated_at"] = datetime.now().isoformat()
+            save_profiles()
+            yield sse_format({
+                "status": "ok",
+                "action": "updated",
+                "profile": profile
+            })
+
+        elif action == "search":
+            # 关键词搜索（姓名/薄弱点/上次学到）
+            kw = keyword or notes
+            if not kw:
+                yield sse_format({
+                    "status": "error",
+                    "action": "search",
+                    "error": "缺少 keyword 参数"
+                })
+                return
+            results = [p for p in PROFILES if
+                       kw in p.get("name", "") or
+                       kw in p.get("weak_points", "") or
+                       kw in p.get("last_topic", "")]
+            yield sse_format({
+                "status": "ok",
+                "action": "search",
+                "keyword": kw,
+                "count": len(results),
+                "results": results
+            })
+
+        elif action == "list":
+            yield sse_format({
+                "status": "ok",
+                "action": "list",
+                "count": len(PROFILES),
+                "profiles": PROFILES
+            })
+
+        elif action == "delete":
+            # 删除档案（测试用）
+            before = len(PROFILES)
+            PROFILES[:] = [p for p in PROFILES if p.get("name") != name]
+            save_profiles()
+            yield sse_format({
+                "status": "ok",
+                "action": "deleted",
+                "name": name,
+                "removed": before - len(PROFILES),
+                "remaining": len(PROFILES)
+            })
+
+        else:
+            yield sse_format({"status": "error", "error": f"unknown action: {action}"})
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
 if __name__ == "__main__":
