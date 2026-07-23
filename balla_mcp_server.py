@@ -230,21 +230,39 @@ async def plotter(func: str = "x*x", x_min: float = -5, x_max: float = 5):
 
 
 # ============ 工具 3: problem_generator ==========
+# 主题枚举（与学情画像的 last_topic / 错题本的 function_type 对齐）
+PROBLEM_TOPICS = list(PROBLEM_BANK.keys())
+
+
 @app.get("/problem_generator")
 async def problem_gen(topic: str = "二次函数", difficulty: str = "mid"):
-    """生成同类题 - SSE 格式"""
+    """生成同类题 - SSE 格式
+
+    字段说明：
+        - topic: 主题，从 PROBLEM_TOPICS 选（与学情画像的 last_topic 对齐）
+        - difficulty: easy / mid / hard
+    """
     async def event_stream():
         try:
-            bank = PROBLEM_BANK.get(topic, PROBLEM_BANK["二次函数"])
+            # topic 不在枚举内时兜底用二次函数
+            if topic not in PROBLEM_TOPICS:
+                warning = f"topic '{topic}' 不在标准枚举中，已兜底为'二次函数'"
+                topic_actual = "二次函数"
+            else:
+                warning = None
+                topic_actual = topic
+
+            bank = PROBLEM_BANK.get(topic_actual, PROBLEM_BANK["二次函数"])
             filtered = [p for p in bank if p.get("diff") == difficulty] or bank
             problem = random.choice(filtered)
             yield sse_format({
                 "status": "ok",
-                "topic": topic,
+                "topic": topic_actual,
                 "difficulty": difficulty,
                 "question": problem["q"],
                 "answer": problem["a"],
                 "hint": problem.get("hint", ""),
+                "warning": warning,
                 "柏拉提示": "（答案仅柏拉可见，不要直接告诉学生）",
             })
         except Exception as ex:
@@ -255,31 +273,79 @@ async def problem_gen(topic: str = "二次函数", difficulty: str = "mid"):
 
 @app.get("/problem_generator/topics")
 def list_topics():
-    """列出所有可用主题"""
+    """列出所有可用主题（与学情画像的 last_topic 枚举对齐）"""
     return {
         "topics": [
             {"name": k, "count": len(v), "difficulties": list(set(p.get("diff", "mid") for p in v))}
             for k, v in PROBLEM_BANK.items()
-        ]
+        ],
+        "function_type_enum": FUNCTION_TYPE_ENUM,  # 与错题本/学情画像对齐
     }
 
 
 # ============ 工具 4: mistake_recorder ==========
+# 错误类型枚举（与学情诊断 F1-F12 一一对应）
+ERROR_TYPE_ENUM = [
+    "未分类",
+    "F1概念不清",
+    "F2定义域遗漏",
+    "F3图像错",
+    "F4单调性错",
+    "F5奇偶性错",
+    "F6复合函数混淆",
+    "F7反函数错",
+    "F8指数对数法则",
+    "F9三角公式",
+    "F10二次顶点",
+    "F12心理卡",
+]
+
+# 函数类型枚举（与学情画像的 last_topic / weak_points 一致）
+FUNCTION_TYPE_ENUM = [
+    "未分类",
+    "一次函数",
+    "二次函数",
+    "指数函数",
+    "对数函数",
+    "幂函数",
+    "三角函数",
+    "复合函数",
+    "分段函数",
+]
+
+
 @app.get("/mistake_recorder")
 async def record_or_list_mistakes(
     action: str = "list",
-    student_id: str = "stu_001",
+    student_id: str = "",
     function_type: str = "未分类",
     question: str = "",
     wrong_answer: str = "",
     correct_answer: str = "",
     error_type: str = "未分类",
 ):
-    """错题记录工具 - SSE 格式"""
+    """错题记录工具 - SSE 格式
+
+    字段说明：
+        - student_id: **必传学生名字**（与学情画像的 name 字段对齐）
+        - function_type: 函数类型，从 FUNCTION_TYPE_ENUM 选
+        - error_type: 错误类型，从 ERROR_TYPE_ENUM 选
+    """
     async def event_stream():
         global MISTAKES
 
+        # 兜底：student_id 空时给默认值
+        if not student_id:
+            student_id = "未命名学生"
+
         if action == "record":
+            # 校验 enum（不在枚举内就保留原值，但加 warning）
+            warning = None
+            if function_type not in FUNCTION_TYPE_ENUM:
+                warning = f"function_type '{function_type}' 不在标准枚举中"
+            if error_type not in ERROR_TYPE_ENUM:
+                warning = (warning or "") + f" error_type '{error_type}' 不在标准枚举中"
+
             entry = {
                 "id": len(MISTAKES) + 1,
                 "student_id": student_id,
@@ -298,20 +364,25 @@ async def record_or_list_mistakes(
                 "id": entry["id"],
                 "total_mistakes": len(MISTAKES),
                 "entry": entry,
+                "warning": warning,
             })
 
         elif action == "list":
             filtered = [m for m in MISTAKES if m["student_id"] == student_id]
             by_type = {}
+            by_func = {}
             for m in filtered:
                 et = m.get("error_type", "未分类")
+                ft = m.get("function_type", "未分类")
                 by_type[et] = by_type.get(et, 0) + 1
+                by_func[ft] = by_func.get(ft, 0) + 1
             yield sse_format({
                 "status": "ok",
                 "action": "list",
                 "student_id": student_id,
                 "count": len(filtered),
                 "by_error_type": by_type,
+                "by_function_type": by_func,
                 "mistakes": filtered[-10:],
             })
 
@@ -332,6 +403,29 @@ async def record_or_list_mistakes(
                 "by_error_type": by_type,
                 "by_function_type": by_func,
             })
+
+        elif action == "search_by_function":
+            # 按函数类型搜（学情画像的 weak_points 也能触发）
+            results = [m for m in MISTAKES if m.get("function_type") == function_type]
+            yield sse_format({
+                "status": "ok",
+                "action": "search_by_function",
+                "function_type": function_type,
+                "count": len(results),
+                "mistakes": results[-10:],
+            })
+
+        elif action == "search_by_error":
+            # 按错误类型搜（学情诊断的 F1-F12 也能触发）
+            results = [m for m in MISTAKES if m.get("error_type") == error_type]
+            yield sse_format({
+                "status": "ok",
+                "action": "search_by_error",
+                "error_type": error_type,
+                "count": len(results),
+                "mistakes": results[-10:],
+            })
+
         else:
             yield sse_format({"status": "error", "error": f"unknown action: {action}"})
 
@@ -348,6 +442,15 @@ def clear_mistakes(student_id: str = None):
         MISTAKES = []
     save_mistakes()
     return {"status": "ok", "remaining": len(MISTAKES)}
+
+
+# 暴露枚举给前端（供超星插件菜单用）
+@app.get("/mistake_recorder/enums")
+def get_mistake_enums():
+    return {
+        "function_type": FUNCTION_TYPE_ENUM,
+        "error_type": ERROR_TYPE_ENUM,
+    }
 
 
 # ============ 工具 5: student_profile（学情画像 - 长期记忆核心）============
@@ -509,6 +612,19 @@ async def student_profile(
                 "name": name,
                 "removed": before - len(PROFILES),
                 "remaining": len(PROFILES)
+            })
+
+        elif action == "clear_all":
+            # 清空所有档案（测试/重置用）
+            before = len(PROFILES)
+            PROFILES.clear()
+            save_profiles()
+            yield sse_format({
+                "status": "ok",
+                "action": "cleared",
+                "removed": before,
+                "remaining": 0,
+                "warning": "所有学生档案已清空"
             })
 
         else:
